@@ -28,6 +28,13 @@ Wiring (typical):
 
 Adjust pins in the sketches if you use different GPIOs.
 
+Enclosure:
+
+<img width="527" height="662" alt="image" src="https://github.com/user-attachments/assets/073a582e-577a-4d86-93b4-127253ba2f39" />
+<img width="790" height="642" alt="image" src="https://github.com/user-attachments/assets/f9e592eb-6857-463a-8dbb-0c1acc432e50" />
+<img width="749" height="643" alt="image" src="https://github.com/user-attachments/assets/6ebf0214-24ec-4b1e-8440-d2ba425ea50d" />
+
+
 ## Required Libraries
 Install the following Arduino / PlatformIO libraries before compiling:
 - Firebase ESP Client (e.g. Firebase_ESP_Client) — for Firestore integration
