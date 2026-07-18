@@ -1,310 +1,277 @@
 #include <WiFi.h>
 #include <Wire.h>
 #include <Adafruit_AHTX0.h>
-#include <Firebase_ESP_Client.h>
-#include "addons/TokenHelper.h"
-#include "addons/RTDBHelper.h"
+#include <WiFiClientSecure.h>
+#include <HTTPClient.h>
 
-// ===== PIN DEFINITIONS =====
-#define TRIGGER_PIN 5 // HC-SR04 Trigger
-#define ECHO_PIN 18   // HC-SR04 Echo
-#define LED_BUILTIN 2 // Onboard LED
-#define I2C_SDA 21    // AHT25 SDA (I2C Data)
-#define I2C_SCL 22    // AHT25 SCL (I2C Clock)
+// ===== PIN-DEFINITIONEN =====
+#define TRIGGER_PIN 20      // HC-SR04 Trigger
+#define ECHO_PIN 21        // HC-SR04 Echo
+#define LED_BUILTIN 2      // Onboard LED
+#define I2C_SDA 7         // AHT25 SDA (I2C Data)  (Grün)
+#define I2C_SCL 9         // AHT25 SCL (I2C Clock) (Lila)
 
 // WiFi-Credentials
-const char *ssid = "network SSID";
-const char *password = "networkpassword";
+const char* ssid = "REPLACE_ME_WIFI_SSID";
+const char* password = "REPLACE_ME_WIFI_PASSWORD";
 
 // Firebase-Credentials
-#define FIREBASE_API_KEY "YOUR_API_KEY"
-#define FIREBASE_PROJECT_ID "YOUR_PROJECT_ID"
-#define FIREBASE_USER_EMAIL "YOUR_EMAIL"
-#define FIREBASE_USER_PASSWORD "YOUR_PASSWORD"
+#define FIREBASE_API_KEY "REPLACE_ME_FIREBASE_API_KEY"
+#define FIREBASE_PROJECT_ID "REPLACE_ME_FIREBASE_PROJECT_ID"
+#define FIREBASE_USER_EMAIL "REPLACE_ME_FIREBASE_USER_EMAIL"
+#define FIREBASE_USER_PASSWORD "REPLACE_ME_FIREBASE_USER_PASSWORD"
 
-#define SLEEP_DURATION 21600 // seconds (6 hours)
+// Deep Sleep Konfiguration
+#define SLEEP_DURATION 21600 // Sekunden (6 Stunden)
 #define uS_TO_S_FACTOR 1000000ULL
 
-// Sensor objects
+// Zähler im RTC-Speicher, der den Deep Sleep überlebt
+RTC_DATA_ATTR int bootCount = 0;
+
+// Sensor-Objekte
 Adafruit_AHTX0 aht;
-FirebaseData fbdo;
-FirebaseAuth auth;
-FirebaseConfig config;
-
-bool firebaseReady = false;
 unsigned long currentUnixTime = 0;
+String idToken = ""; // Speichert das temporäre Auth-Token
 
-void setup()
-{
-    Serial.begin(115200);
-    delay(1000);
+// Forward declarations
+void goToDeepSleep();
+bool connectToWiFi();
+bool getUnixTime();
+bool refreshAuthToken();
+bool uploadToFirestore(float distance, float temperature, float humidity);
+float measureDistance();
 
-    // Disable LED
-    pinMode(LED_BUILTIN, OUTPUT);
-    digitalWrite(LED_BUILTIN, LOW);
-
-    // Ultrasonic pins
-    pinMode(TRIGGER_PIN, OUTPUT);
-    pinMode(ECHO_PIN, INPUT);
-    digitalWrite(TRIGGER_PIN, LOW);
-
-    // Initialize I2C for AHT25 with custom pins
-    Wire.begin(I2C_SDA, I2C_SCL);
-
-    // Initialize AHT25
-    if (!aht.begin())
-    {
-        Serial.println("ERROR: AHT25 not found!");
-        goToDeepSleep();
-        return;
-    }
-
-    // Measure distance
-    float distance = measureDistance();
-
-    if (distance < 0)
-    {
-        Serial.println("ERROR: Distance measurement failed");
-        goToDeepSleep();
-        return;
-    }
-
-    // Measure temperature & humidity
-    sensors_event_t humidity, temp;
-    aht.getEvent(&humidity, &temp);
-
-    float temperature = temp.temperature;
-    float humidityValue = humidity.relative_humidity;
-
-    // Connect to WiFi
-    if (!connectToWiFi())
-    {
-        Serial.println("ERROR: WiFi connection failed");
-        goToDeepSleep();
-        return;
-    }
-
-    Serial.println("✓ WiFi connected");
-
-    // Get time from NTP server
-    if (!getUnixTime())
-    {
-        Serial.println("ERROR: Time synchronization failed");
-        WiFi.disconnect(true);
-        goToDeepSleep();
-        return;
-    }
-
-    Serial.println("✓ Time synchronized");
-
-    // Initialize Firebase
-    if (!initFirebase())
-    {
-        Serial.println("ERROR: Firebase initialization failed");
-        WiFi.disconnect(true);
-        goToDeepSleep();
-        return;
-    }
-
-    // Upload data
-    if (uploadToFirestore(distance, temperature, humidityValue))
-    {
-        Serial.println("✓ Data sent");
-    }
-    else
-    {
-        Serial.println("ERROR: Data upload failed");
-    }
-
-    // Cleanup
-    WiFi.disconnect(true);
-    WiFi.mode(WIFI_OFF);
-    Serial.println("✓ WiFi disconnected");
-
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+  
+  // Prüfung auf den allerersten Start
+  if (bootCount == 0) {
+    Serial.println("Erster Systemstart erkannt. Warte 30 Sekunden...");
+    bootCount++; // Zähler erhöhen, damit beim nächsten Aufwachen nicht mehr gewartet wird
+    delay(30000); 
+    Serial.println("Wartezeit vorbei. Starte Messung...");
+  } else {
+    Serial.println("Aus Deep Sleep aufgewacht. Messung startet sofort.");
+  }
+  
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, LOW);
+  
+  pinMode(TRIGGER_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+  digitalWrite(TRIGGER_PIN, LOW);
+  
+  Wire.begin(I2C_SDA, I2C_SCL);
+  
+  if (!aht.begin()) {
+    Serial.println("ERROR: AHT25 nicht gefunden!");
     goToDeepSleep();
+    return;
+  }
+  
+  float distance = measureDistance();
+  if (distance < 0) {
+    Serial.println("ERROR: Distanzmessung fehlgeschlagen");
+    goToDeepSleep();
+    return;
+  }
+  
+  sensors_event_t humidity, temp;
+  aht.getEvent(&humidity, &temp);
+  float temperature = temp.temperature;
+  float humidityValue = humidity.relative_humidity;
+  
+  if (!connectToWiFi()) {
+    Serial.println("ERROR: WiFi-Verbindung fehlgeschlagen");
+    goToDeepSleep();
+    return;
+  }
+  Serial.println("✓ WiFi verbunden");
+  
+  if (!getUnixTime()) {
+    Serial.println("ERROR: Zeit-Synchronisation fehlgeschlagen");
+    WiFi.disconnect(true);
+    goToDeepSleep();
+    return;
+  }
+  Serial.println("✓ Zeit synchronisiert");
+  
+  // Schritt 1: Bei Firebase authentifizieren und Token holen
+  if (!refreshAuthToken()) {
+    Serial.println("ERROR: Firebase-Authentifizierung fehlgeschlagen");
+    WiFi.disconnect(true);
+    goToDeepSleep();
+    return;
+  }
+  Serial.println("✓ Firebase authentifiziert");
+  
+  // Schritt 2: Daten mit dem Token hochladen
+  if (uploadToFirestore(distance, temperature, humidityValue)) {
+    Serial.println("✓ Daten gesendet");
+  } else {
+    Serial.println("ERROR: Daten-Upload fehlgeschlagen");
+  }
+  
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+  Serial.println("✓ WiFi getrennt");
+  
+  goToDeepSleep();
 }
 
-void loop()
-{
-    // Not used
+void loop() {
+  // Nicht verwendet
 }
 
-bool connectToWiFi()
-{
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(ssid, password);
-
-    int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 40)
-    {
-        delay(500);
-        attempts++;
-    }
-
-    return (WiFi.status() == WL_CONNECTED);
+bool connectToWiFi() {
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 40) {
+    delay(500);
+    attempts++;
+  }
+  return (WiFi.status() == WL_CONNECTED);
 }
 
-bool getUnixTime()
-{
-    // Configure NTP servers (GMT+1 for Germany, +3600 seconds offset)
-    configTime(3600, 3600, "pool.ntp. org", "time.nist.gov", "time.google.com");
-
-    // Wait for time synchronization
-    int attempts = 0;
-    while (attempts < 20)
-    {
-        time_t now = time(nullptr);
-        if (now > 1000000000)
-        { // Valid Unix time (after year 2001)
-            currentUnixTime = now;
-            return true;
-        }
-        delay(500);
-        attempts++;
+bool getUnixTime() {
+  configTime(3600, 3600, "pool.ntp.org", "time.nist.gov", "time.google.com");
+  int attempts = 0;
+  while (attempts < 20) {
+    time_t now = time(nullptr);
+    if (now > 1000000000) {
+      currentUnixTime = now;
+      return true;
     }
-
-    return false;
+    delay(500);
+    attempts++;
+  }
+  return false;
 }
 
-bool initFirebase()
-{
-    config.api_key = FIREBASE_API_KEY;
-    auth.user.email = FIREBASE_USER_EMAIL;
-    auth.user.password = FIREBASE_USER_PASSWORD;
-    config.token_status_callback = tokenStatusCallback;
-    config.timeout.serverResponse = 10 * 1000;
-
-    Firebase.begin(&config, &auth);
-    Firebase.reconnectWiFi(true);
-
-    int attempts = 0;
-    while (!Firebase.ready() && attempts < 30)
-    {
-        delay(1000);
-        attempts++;
-
-        if (WiFi.status() != WL_CONNECTED)
-        {
-            return false;
-        }
+// Holt das ID-Token von Google Auth via REST
+bool refreshAuthToken() {
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  
+  String url = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=" + String(FIREBASE_API_KEY);
+  
+  http.begin(client, url);
+  http.addHeader("Content-Type", "application/json");
+  
+  String authPayload = "{\"email\":\"" + String(FIREBASE_USER_EMAIL) + "\",\"password\":\"" + String(FIREBASE_USER_PASSWORD) + "\",\"returnSecureToken\":true}";
+  
+  int httpResponseCode = http.POST(authPayload);
+  
+  if (httpResponseCode == 200) {
+    String response = http.getString();
+    
+    int tokenIndex = response.indexOf("\"idToken\": \"");
+    if (tokenIndex != -1) {
+      tokenIndex += 12; 
+      int endIndex = response.indexOf("\"", tokenIndex);
+      idToken = response.substring(tokenIndex, endIndex);
+      http.end();
+      return true;
     }
-
-    firebaseReady = Firebase.ready();
-    return firebaseReady;
+  }
+  
+  Serial.print("Auth-Fehler Code: ");
+  Serial.println(httpResponseCode);
+  http.end();
+  return false;
 }
 
-bool uploadToFirestore(float distance, float temperature, float humidity)
-{
-    if (!Firebase.ready())
-    {
-        return false;
-    }
+bool uploadToFirestore(float distance, float temperature, float humidity) {
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  
+  String bearerHeader = "Bearer " + idToken;
+  
+  String jsonPayload = "{\"fields\":{"
+    "\"distance\":{\"doubleValue\":" + String(distance, 2) + "},"
+    "\"temperature\":{\"doubleValue\":" + String(temperature, 2) + "},"
+    "\"humidity\":{\"doubleValue\":" + String(humidity, 2) + "},"
+    "\"timestamp\":{\"integerValue\":\"" + String(currentUnixTime) + "\"}"
+  "}}";
 
-    // Document ID based on Unix timestamp
-    String documentId = String(currentUnixTime);
-    String documentPath = "measurements/" + documentId;
-
-    FirebaseJson content;
-    content.set("fields/distance/doubleValue", String(distance, 2));
-    content.set("fields/temperature/doubleValue", String(temperature, 2));
-    content.set("fields/humidity/doubleValue", String(humidity, 2));
-    content.set("fields/timestamp/integerValue", String(currentUnixTime));
-
-    if (!Firebase.Firestore.createDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw()))
-    {
-        Serial.print("Firestore Error: ");
-        Serial.println(fbdo.errorReason());
-        return false;
-    }
-
-    // Also update latest
-    String latestPath = "measurements/latest";
-    Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", latestPath.c_str(), content.raw(), "distance,temperature,humidity,timestamp");
-
-    return true;
+  String url = "https://firestore.googleapis.com/v1/projects/" + String(FIREBASE_PROJECT_ID) + "/databases/(default)/documents/measurements?documentId=" + String(currentUnixTime);
+  
+  http.begin(client, url);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("Authorization", bearerHeader.c_str());
+  
+  int httpResponseCode = http.POST(jsonPayload);
+  Serial.print("Firestore New Doc Response Code: ");
+  Serial.println(httpResponseCode);
+  http.end();
+  
+  String latestUrl = "https://firestore.googleapis.com/v1/projects/" + String(FIREBASE_PROJECT_ID) + "/databases/(default)/documents/measurements/latest?updateMask.fieldPaths=distance&updateMask.fieldPaths=temperature&updateMask.fieldPaths=humidity&updateMask.fieldPaths=timestamp";
+  
+  http.begin(client, latestUrl);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("Authorization", bearerHeader.c_str());
+  
+  int latestResponseCode = http.PATCH(jsonPayload);
+  Serial.print("Firestore Latest Patch Response Code: ");
+  Serial.println(latestResponseCode);
+  http.end();
+  
+  return (httpResponseCode == 200);
 }
 
-float measureDistance()
-{
-    const int NUM_MEASUREMENTS = 3;
-    float measurements[NUM_MEASUREMENTS];
-    int validMeasurements = 0;
-
-    for (int i = 0; i < NUM_MEASUREMENTS; i++)
-    {
-        digitalWrite(TRIGGER_PIN, LOW);
-        delayMicroseconds(2);
-        digitalWrite(TRIGGER_PIN, HIGH);
-        delayMicroseconds(10);
-        digitalWrite(TRIGGER_PIN, LOW);
-
-        unsigned long timeout = millis() + 1000;
-
-        while (digitalRead(ECHO_PIN) == LOW)
-        {
-            if (millis() > timeout)
-            {
-                measurements[i] = -1;
-                break;
-            }
-        }
-
-        if (measurements[i] == -1)
-            continue;
-
-        unsigned long startTime = micros();
-
-        while (digitalRead(ECHO_PIN) == HIGH)
-        {
-            if (millis() > timeout)
-            {
-                measurements[i] = -1;
-                break;
-            }
-        }
-
-        if (measurements[i] == -1)
-            continue;
-
-        unsigned long endTime = micros();
-        unsigned long duration = endTime - startTime;
-        float distance = (duration * 0.0343) / 2.0;
-
-        if (distance >= 2.0 && distance <= 400.0)
-        {
-            measurements[i] = distance;
-            validMeasurements++;
-        }
-        else
-        {
-            measurements[i] = -1;
-        }
-
-        delay(100);
+float measureDistance() {
+  const int NUM_MEASUREMENTS = 3;
+  float measurements[NUM_MEASUREMENTS];
+  int validMeasurements = 0;
+  
+  for (int i = 0; i < NUM_MEASUREMENTS; i++) {
+    digitalWrite(TRIGGER_PIN, LOW);
+    delayMicroseconds(2);
+    digitalWrite(TRIGGER_PIN, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(TRIGGER_PIN, LOW);
+    
+    unsigned long timeout = millis() + 1000;
+    while (digitalRead(ECHO_PIN) == LOW) {
+      if (millis() > timeout) { measurements[i] = -1; break; }
     }
-
-    if (validMeasurements == 0)
-    {
-        return -1;
+    if (measurements[i] == -1) continue;
+    
+    unsigned long startTime = micros();
+    while (digitalRead(ECHO_PIN) == HIGH) {
+      if (millis() > timeout) { measurements[i] = -1; break; }
     }
-
-    float sum = 0;
-    for (int i = 0; i < NUM_MEASUREMENTS; i++)
-    {
-        if (measurements[i] > 0)
-        {
-            sum += measurements[i];
-        }
+    if (measurements[i] == -1) continue;
+    
+    unsigned long endTime = micros();
+    unsigned long duration = endTime - startTime;
+    float distance = (duration * 0.0343) / 2.0;
+    
+    if (distance >= 2.0 && distance <= 400.0) {
+      measurements[i] = distance;
+      validMeasurements++;
+    } else {
+      measurements[i] = -1;
     }
-
-    return sum / validMeasurements;
-}
-
-void goToDeepSleep()
-{
-    Serial.println("→ Deep Sleep");
     delay(100);
+  }
+  
+  if (validMeasurements == 0) return -1;
+  
+  float sum = 0;
+  for (int i = 0; i < NUM_MEASUREMENTS; i++) {
+    if (measurements[i] > 0) sum += measurements[i];
+  }
+  return sum / validMeasurements;
+}
 
-    esp_sleep_enable_timer_wakeup(SLEEP_DURATION * uS_TO_S_FACTOR);
-    esp_deep_sleep_start();
+void goToDeepSleep() {
+  Serial.println("→ Deep Sleep");
+  delay(100);
+  esp_sleep_enable_timer_wakeup(SLEEP_DURATION * uS_TO_S_FACTOR);
+  esp_deep_sleep_start();
 }
