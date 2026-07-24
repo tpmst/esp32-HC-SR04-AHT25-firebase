@@ -1,107 +1,78 @@
-# ESP32 HC-SR04 + AHT25 → Firebase
+# ESP32 Distance & Climate Monitor → Firebase
 
-This project contains example sketches for an ESP32 that measure distance with an HC-SR04 ultrasonic sensor and temperature/humidity with an AHT2x (AHT25/AHT20-compatible) sensor and upload the measurements to Google Firebase (Firestore).
+This repository contains example firmware for an ESP32 micro-controller that measures distance using an **HC-SR04** or **RCWL-1670** ultrasonic sensor, and ambient temperature/humidity using an **AHT2x** (AHT25/AHT20-compatible) sensor. Collected measurements are automatically uploaded to Google Firebase (Firestore).
 
-The repo includes several Arduino/ESP32 sketches:
-- `mesure-all-firebase-with-timestamp.ino` — measures distance, temperature and humidity, gets an NTP timestamp and uploads to Firestore with a Unix timestamp as document ID.
-- `mesure-distance-firebase.ino` — measures only the distance and uploads a document identified by date-time.
-- `mesure-distance-with-wifi.ino` — simple distance measurement example that keeps WiFi connected and prints to serial (useful for debugging/wifi testing).
+The system supports dual connectivity: it attempts to upload data over a cellular network using an **A7670E LTE module** and automatically falls back to **Wi-Fi** if no cellular connection is available.
 
-## Hardware
-- ESP32 development board (any common variant)
-- HC-SR04 ultrasonic distance sensor
-- AHT2x I2C temperature & humidity sensor (AHT25 or AHT20 compatible breakout)
-- Breadboard and jumper wires
-- 3.3V power supply (ESP32 runs at 3.3V; if you power HC-SR04 from 5V take care with ESP32 I/O levels)
+---
 
-Wiring (typical):
-- HC-SR04
-  - VCC → 5V (or 3.3V depending on module) — prefer 5V modules; if using 5V, ensure Echo is level-shifted before connecting to ESP32 input
-  - GND → GND
-  - TRIG → ESP32 GPIO 5 (or change in code)
-  - ECHO → ESP32 GPIO 18 (or change)
-- AHT2x (I2C)
-  - VCC → 3.3V
-  - GND → GND
-  - SDA → ESP32 SDA pin (default in `mesure-all-firebase-with-timestamp.ino` is GPIO 21)
-  - SCL → ESP32 SCL pin (default GPIO 22)
+## Features & Supported Hardware
 
-Adjust pins in the sketches if you use different GPIOs.
+* **Microcontroller:** ESP32 development board (any standard variant).
+* **Ultrasonic Distance Sensors:**
+  * **HC-SR04** (Pulse Trigger/Echo mode).
+  * **RCWL-1670** (Waterproof, long-range ultrasonic sensor; supports Pulse Trigger/Echo or UART mode).
+* **Climate Sensor:** **AHT2x** I2C temperature & humidity sensor (AHT25 / AHT20).
+* **Cellular Modem (Optional):** **A7670E** LTE Cat-1 module (communicates over Hardware Serial using AT commands).
+* **Power Optimization:** Configured with Deep Sleep functionality (wakes up, measures, uploads data, turns off modem, and re-enters sleep).
 
-Enclosure:
+---
+
+## Wiring Guide
+
+### 1. Distance Sensors (Pulse Mode)
+* **VCC** $\rightarrow$ 5V (or 3.3V depending on module specifications)
+* **GND** $\rightarrow$ GND
+* **TRIG** $\rightarrow$ ESP32 GPIO 6
+* **ECHO** $\rightarrow$ ESP32 GPIO 8
+
+> **Note:** If powering 5V sensors, ensure the `ECHO` line is stepped down or level-shifted to 3.3V to protect the ESP32 input pin.
+
+### 2. Climate Sensor (AHT25)
+* **VCC** $\rightarrow$ 3.3V
+* **GND** $\rightarrow$ GND
+* **SDA** $\rightarrow$ ESP32 GPIO 7 (Default I2C Data)
+* **SCL** $\rightarrow$ ESP32 GPIO 9 (Default I2C Clock)
+
+### 3. Cellular Modem (A7670E)
+* **VCC** $\rightarrow$ 5V – 10V (Must support peak current bursts up to 2A)
+* **GND** $\rightarrow$ Common GND
+* **TXD** $\rightarrow$ ESP32 GPIO 20 (`Serial1` RX)
+* **RXD** $\rightarrow$ ESP32 GPIO 21 (`Serial1` TX)
+
+---
+
+## 3D Printed Enclosures
+### HC-SR04 Enclosure
 
 <img width="527" height="662" alt="image" src="https://github.com/user-attachments/assets/073a582e-577a-4d86-93b4-127253ba2f39" />
 <img width="790" height="642" alt="image" src="https://github.com/user-attachments/assets/f9e592eb-6857-463a-8dbb-0c1acc432e50" />
 <img width="749" height="643" alt="image" src="https://github.com/user-attachments/assets/6ebf0214-24ec-4b1e-8440-d2ba425ea50d" />
 
+### RCWL-1670 Enclosure
 
-## Required Libraries
-Install the following Arduino / PlatformIO libraries before compiling:
-- Firebase ESP Client (e.g. Firebase_ESP_Client) — for Firestore integration
-- Adafruit AHTX0 (Adafruit_AHTX0) — for AHT2x sensor
-- ArduinoJson or FirebaseJson — the Firebase client may require this (the included sketches use FirebaseJson)
+<img width="1062" height="746" alt="image" src="https://github.com/user-attachments/assets/33d69839-0a9a-4ed6-84c2-53312cb3b307" />
+<img width="911" height="579" alt="image" src="https://github.com/user-attachments/assets/e85e13e2-ffa4-4492-a19e-380194664d0d" />
+<img width="890" height="575" alt="image" src="https://github.com/user-attachments/assets/1775b5ef-e1d6-4e0c-b435-18235bba3379" />
+<img width="866" height="542" alt="image" src="https://github.com/user-attachments/assets/f46cebfd-67d3-4c09-a507-9337d41aa5df" />
 
-You can install libraries in the Arduino IDE via Sketch → Include Library → Manage Libraries, or with PlatformIO's lib_deps.
 
-## Firebase Setup (Firestore)
-Follow these minimal steps to create a Firebase project and make Firestore usable from the ESP32 sketches:
+## Software Setup
 
-1. Create Firebase project
-   - Go to https://console.firebase.google.com/ and create a new project (give it a name).
+### Required Libraries
+Install these libraries in your Arduino IDE or PlatformIO project:
+* **Adafruit AHTX0** (`Adafruit_AHTX0`) — for reading the AHT25 sensor.
+* **WiFiClientSecure** & **HTTPClient** — included in the default ESP32 core for REST API interactions.
 
-2. Enable Firestore
-   - In the project console, open 'Firestore Database' and create a database (in production choose rules accordingly, for testing you can use test mode but secure it later).
+### Configuration
+1. Open the project sketch in Arduino IDE or PlatformIO.
+2. Update network credentials and Firebase constants in the code:
 
-3. Create a Web API Key & Service Account (for REST usage)
-   - In Project Settings → General you'll find the Web API Key. Copy it — in the sketches it's the `FIREBASE_API_KEY` placeholder.
-   - For authentication, the Arduino Firebase client often uses email/password sign-in (create a test user in Authentication → Users) or a custom token. The provided sketches expect an email/password user:
-     - Go to Authentication → Sign-in method and enable Email/Password.
-     - Then create a user under Authentication → Users. Use this email and password in the sketch (`FIREBASE_USER_EMAIL`, `FIREBASE_USER_PASSWORD`).
+```cpp
+const char* ssid = "REPLACE_ME_WIFI_SSID";
+const char* password = "REPLACE_ME_WIFI_PASSWORD";
 
-4. Project ID
-   - In Project Settings → General you can find the Project ID (use as `FIREBASE_PROJECT_ID`).
-
-5. Rules and security
-   - For initial testing you can set the Firestore rules to allow reads/writes while you debug, but lock them down before production. Example test rule (not for production):
-
-```
-service cloud.firestore {
-  match /databases/{database}/documents {
-    match /{document=**} {
-      allow read, write: if true;
-    }
-  }
-}
-```
-
-Note: The Firebase REST/embedded libraries have different auth flows — the sketches in this repo use the Firebase Arduino client that handles authentication with email/password; if you'd prefer to use a service account/key you must adapt the library and token flow.
-
-## Configuration
-1. Open the sketch you want to use in the Arduino IDE or PlatformIO.
-2. Fill in your WiFi credentials (`ssid`, `password`).
-3. Fill in Firebase placeholders in the sketch:
-   - `FIREBASE_API_KEY`
-   - `FIREBASE_PROJECT_ID`
-   - `FIREBASE_USER_EMAIL`
-   - `FIREBASE_USER_PASSWORD`
-4. Adjust pin definitions if your wiring differs.
-
-## Build & Upload
-- Using Arduino IDE: select the correct ESP32 board (Tools → Board), select the correct port, then compile and upload.
-- Using PlatformIO: configure `platformio.ini` for an ESP32 board and build/upload.
-
-## Troubleshooting
-- If AHT sensor not found: check wiring (SDA/SCL), VCC (3.3V) and that you set correct SDA/SCL pins in `Wire.begin()` if using custom pins.
-- If HC-SR04 returns invalid values: verify TRIG/ECHO wiring, ensure correct power (some modules need 5V), and consider adding a level shifter on ECHO to ESP32.
-- WiFi problems: check SSID/password, serial logs often show status. Reconnect logic is included in the WiFi example.
-- Firebase auth errors: verify API key, Project ID and that the email/password user exists and is enabled.
-
-## Notes and next steps
-- Consider switching to secure token-based authentication or Cloud Functions for heavy usage.
-- Add error logging and retry/backoff for network and Firebase operations.
-- Add OTA updates if you want remote firmware updates.
-
----
-If you want, I can:
-- Add a wiring diagram image (ask and I’ll produce a simple SVG/PDF),
-- Fix small code issues (e.g. `=` vs `==` in `connectToWiFi()` in `mesure-distance-with-wifi.ino`) and run a quick compile check (if you have your board and toolchain).
+#define FIREBASE_API_KEY "REPLACE_ME_FIREBASE_API_KEY"
+#define FIREBASE_PROJECT_ID "REPLACE_ME_FIREBASE_PROJECT_ID"
+#define FIREBASE_USER_EMAIL "REPLACE_ME_FIREBASE_USER_EMAIL"
+#define FIREBASE_USER_PASSWORD "REPLACE_ME_FIREBASE_USER_PASSWORD"
