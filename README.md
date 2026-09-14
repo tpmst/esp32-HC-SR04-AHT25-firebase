@@ -1,78 +1,171 @@
-# ESP32 Distance & Climate Monitor → Firebase
+# ESP32 heating and sensor firmware
 
-This repository contains example firmware for an ESP32 micro-controller that measures distance using an **HC-SR04** or **RCWL-1670** ultrasonic sensor, and ambient temperature/humidity using an **AHT2x** (AHT25/AHT20-compatible) sensor. Collected measurements are automatically uploaded to Google Firebase (Firestore).
+This repository contains Arduino sketches for ESP32 boards. The sketches cover
+two related use cases:
 
-The system supports dual connectivity: it attempts to upload data over a cellular network using an **A7670E LTE module** and automatically falls back to **Wi-Fi** if no cellular connection is available.
+* measuring distance with an HC-SR04 or RCWL-1670 ultrasonic sensor, optionally
+  together with an AHT25/AHT20-compatible temperature and humidity sensor; and
+* reading a locally reachable ETA heating controller over its HTTP/XML API and
+  writing the result to Firebase Firestore for the
+  [pellet-heizung-frontend](https://github.com/tpmst/pellet-heizung-frontend)
+  dashboard.
 
----
+Each `.ino` file is a separate example. Compile and upload only the sketch
+matching the connected hardware and configured service.
 
-## Features & Supported Hardware
+## Supported sketches and hardware
 
-* **Microcontroller:** ESP32 development board (any standard variant).
-* **Ultrasonic Distance Sensors:**
-  * **HC-SR04** (Pulse Trigger/Echo mode).
-  * **RCWL-1670** (Waterproof, long-range ultrasonic sensor; supports Pulse Trigger/Echo or UART mode).
-* **Climate Sensor:** **AHT2x** I2C temperature & humidity sensor (AHT25 / AHT20).
-* **Cellular Modem (Optional):** **A7670E** LTE Cat-1 module (communicates over Hardware Serial using AT commands).
-* **Power Optimization:** Configured with Deep Sleep functionality (wakes up, measures, uploads data, turns off modem, and re-enters sleep).
+| Sketch | Hardware and behavior |
+| --- | --- |
+| `mesure-distance-with-wifi.ino` | HC-SR04 distance monitor over Wi-Fi; measurements are printed to Serial every 30 seconds and are not uploaded to Firebase. Uses GPIO 5 (trigger) and GPIO 18 (echo). |
+| `mesure-distance-firebase.ino` | HC-SR04 distance measurements uploaded to Firestore using the Firebase ESP Client library. Uses GPIO 5 (trigger) and GPIO 18 (echo), then sleeps for six hours. |
+| `mesure-all-firebase-with-timestamp.ino` | HC-SR04 plus AHT25/AHT20-compatible temperature and humidity sensor. Uses GPIO 20/21 for trigger/echo and GPIO 7/9 for I2C, then uploads to Firestore and sleeps for six hours. |
+| `mesure-distance-rcwl.ino` | RCWL-1670 in trigger/echo mode plus AHT25/AHT20-compatible temperature and humidity sensor. Uses GPIO 21/20 for trigger/echo and GPIO 7/9 for I2C. The sketch contains A7670E serial pin definitions, but its upload path uses Wi-Fi and Firebase REST authentication. |
+| `eta-api-connector.ino` | ETA heating API connector. It does not measure the ultrasonic or climate sensors; it polls the ETA controller over local HTTP and uploads selected XML responses to Firestore. It checks every five minutes and sleeps between checks. |
 
----
+The code targets a standard ESP32 Arduino environment. Pin assignments are
+defined in each sketch and may need to be changed for a different ESP32 board.
 
-## Wiring Guide
+## Wiring
 
-### 1. Distance Sensors (Pulse Mode)
-* **VCC** $\rightarrow$ 5V (or 3.3V depending on module specifications)
-* **GND** $\rightarrow$ GND
-* **TRIG** $\rightarrow$ ESP32 GPIO 6
-* **ECHO** $\rightarrow$ ESP32 GPIO 8
+### HC-SR04 (pulse trigger/echo)
 
-> **Note:** If powering 5V sensors, ensure the `ECHO` line is stepped down or level-shifted to 3.3V to protect the ESP32 input pin.
+The Firebase and local Wi-Fi HC-SR04 examples use the pin assignments shown
+below:
 
-### 2. Climate Sensor (AHT25)
-* **VCC** $\rightarrow$ 3.3V
-* **GND** $\rightarrow$ GND
-* **SDA** $\rightarrow$ ESP32 GPIO 7 (Default I2C Data)
-* **SCL** $\rightarrow$ ESP32 GPIO 9 (Default I2C Clock)
+* VCC -> 5 V (or the voltage specified by the sensor)
+* GND -> GND
+* Trigger -> GPIO 5
+* Echo -> GPIO 18
 
-### 3. Cellular Modem (A7670E)
-* **VCC** $\rightarrow$ 5V – 10V (Must support peak current bursts up to 2A)
-* **GND** $\rightarrow$ Common GND
-* **TXD** $\rightarrow$ ESP32 GPIO 20 (`Serial1` RX)
-* **RXD** $\rightarrow$ ESP32 GPIO 21 (`Serial1` TX)
+`mesure-all-firebase.ino` uses GPIO 20 for trigger and GPIO 21 for echo
+instead. The ESP32 is a 3.3 V device: level-shift a 5 V echo signal before it
+reaches an ESP32 input.
 
----
+### RCWL-1670 and AHT25
 
-## 3D Printed Enclosures
-### HC-SR04 Enclosure
+`mesure-distance-rcwl.ino` uses:
 
-<img width="527" height="662" alt="image" src="https://github.com/user-attachments/assets/073a582e-577a-4d86-93b4-127253ba2f39" />
-<img width="790" height="642" alt="image" src="https://github.com/user-attachments/assets/f9e592eb-6857-463a-8dbb-0c1acc432e50" />
-<img width="749" height="643" alt="image" src="https://github.com/user-attachments/assets/6ebf0214-24ec-4b1e-8440-d2ba425ea50d" />
+* RCWL-1670 trigger -> GPIO 21
+* RCWL-1670 echo -> GPIO 20
+* AHT25/AHT20 SDA -> GPIO 7
+* AHT25/AHT20 SCL -> GPIO 9
+* sensor VCC/GND -> the module's specified supply and common GND
 
-### RCWL-1670 Enclosure
+`mesure-all-firebase-with-timestamp.ino` uses the same I2C pins and uses GPIO
+20/21 for its HC-SR04.
 
-<img width="1062" height="746" alt="image" src="https://github.com/user-attachments/assets/33d69839-0a9a-4ed6-84c2-53312cb3b307" />
-<img width="911" height="579" alt="image" src="https://github.com/user-attachments/assets/e85e13e2-ffa4-4492-a19e-380194664d0d" />
-<img width="890" height="575" alt="image" src="https://github.com/user-attachments/assets/1775b5ef-e1d6-4e0c-b435-18235bba3379" />
-<img width="866" height="542" alt="image" src="https://github.com/user-attachments/assets/f46cebfd-67d3-4c09-a507-9337d41aa5df" />
+### A7670E wiring in the RCWL example
 
+The RCWL sketch defines `MODEM_RX_PIN` as GPIO 4 and `MODEM_TX_PIN` as GPIO 5
+for a possible A7670E connection. The current sketch does not initialize or
+use the modem; do not treat it as an active cellular fallback.
 
-## Software Setup
+## ETA API connector
 
-### Required Libraries
-Install these libraries in your Arduino IDE or PlatformIO project:
-* **Adafruit AHTX0** (`Adafruit_AHTX0`) — for reading the AHT25 sensor.
-* **WiFiClientSecure** & **HTTPClient** — included in the default ESP32 core for REST API interactions.
+`eta-api-connector.ino` is the firmware used to bridge an ETA heating
+controller that is reachable from the ESP32's local network to Firestore:
 
-### Configuration
-1. Open the project sketch in Arduino IDE or PlatformIO.
-2. Update network credentials and Firebase constants in the code:
+1. The ESP32 joins Wi-Fi.
+2. It requests XML from the ETA controller at `http://<etaHost>:8080`.
+3. It parses the `strValue` attribute from the status response to classify the
+   heating as on or off.
+4. On a status change, it updates the status document and uploads all four XML
+   responses. Otherwise, it uploads the full set when the 12-hour interval is
+   reached.
+5. It disconnects Wi-Fi and enters five-minute deep sleep.
+
+### Connector configuration
+
+Edit the empty constants near the top of `eta-api-connector.ino` before
+uploading:
 
 ```cpp
-const char* ssid = "REPLACE_ME_WIFI_SSID";
-const char* password = "REPLACE_ME_WIFI_PASSWORD";
+const char* ssid = "your-wifi-network";
+const char* password = "your-wifi-password";
 
-#define FIREBASE_API_KEY "REPLACE_ME_FIREBASE_API_KEY"
-#define FIREBASE_PROJECT_ID "REPLACE_ME_FIREBASE_PROJECT_ID"
-#define FIREBASE_USER_EMAIL "REPLACE_ME_FIREBASE_USER_EMAIL"
-#define FIREBASE_USER_PASSWORD "REPLACE_ME_FIREBASE_USER_PASSWORD"
+#define FIRESTORE_HOST "firestore.googleapis.com"
+#define FIREBASE_PROJECT_ID "your-project-id"
+#define SECRET_KEY "your-connector-secret"
+
+const String etaHost = "192.168.1.100";
+const int etaPort = 8080;
+```
+
+The connector requests these ETA paths:
+
+* `/user/var/264/10891/0/0/12080` (`pathStatus`)
+* `/user/var/264/10891/0/0/12013` (`pathAsche`)
+* `/user/var/264/10891/0/0/12016` (`pathMenge`)
+* `/user/errors` (`pathErrors`)
+
+The status is considered off when `strValue` is `Aus` or `Abstellen`;
+other parsed values are treated as on. The first boot is treated as a status
+change. The regular full-upload interval is `43200` seconds (12 hours), and
+the deep-sleep interval is `300` seconds (five minutes). A status change can
+therefore cause an immediate full upload rather than waiting for the 12-hour
+interval.
+
+## Firestore data written by the ETA connector
+
+The connector uses the Firestore REST API and writes to the `heizung`
+collection:
+
+* `heizung/status_heizung` is patched when the on/off state changes. It
+  contains `ist_an` (boolean), `letzte_aenderung` (Unix time integer), and
+  `secretKey` (string).
+* `heizung/<unix-time>` is created for a status-triggered or 12-hour full
+  upload. It contains `xml_status`, `xml_asche`, `xml_menge`, and `xml_errors`
+  (the raw XML responses as strings), plus `ist_an` (boolean), `timestamp`
+  (Unix time integer), and `secretKey` (string).
+
+Document IDs for full uploads are the Unix timestamp returned after NTP
+synchronization. The frontend reads these documents to display the ETA
+heating state and history; the frontend repository is not built or deployed
+by this firmware project.
+
+The other Firebase examples use a separate `measurements` collection. They
+write distance and, where applicable, temperature, humidity, and timestamp
+fields, and update `measurements/latest`. They are independent of the
+ETA-specific `heizung` documents.
+
+## Wi-Fi, Firebase, and secrets
+
+The sketches contain placeholder values for Wi-Fi and Firebase configuration.
+Replace them locally before compiling:
+
+* ETA connector: `ssid`, `password`, `FIRESTORE_HOST`,
+  `FIREBASE_PROJECT_ID`, and `SECRET_KEY` in `eta-api-connector.ino`.
+* Firebase sensor examples: the Wi-Fi credentials and Firebase API key,
+  project ID, user email, and user password defined in the selected sketch.
+
+Do not commit real Wi-Fi passwords, Firebase credentials, API keys, or
+connector secrets. Keep local values in an ignored/private configuration or
+restore placeholders before committing. The ETA connector currently embeds
+`SECRET_KEY` as a Firestore field and calls `WiFiClientSecure::setInsecure()`;
+this is the behavior of the current firmware, not a replacement for proper
+Firestore authentication or certificate validation. Restrict Firestore rules
+and network access accordingly, and treat the stored secret as exposed to
+anyone who can read the document.
+
+The Firebase sensor sketches authenticate with a Firebase email/password and
+send the resulting ID token in the Firestore REST request (or use
+`Firebase_ESP_Client` in `mesure-distance-firebase.ino`). Install the
+corresponding ESP32 core and library dependencies in Arduino IDE or
+PlatformIO, including `Adafruit_AHTX0` for the AHT sensor sketches and the
+Firebase ESP Client library for `mesure-distance-firebase.ino`.
+
+## 3D-printed enclosures
+
+### HC-SR04 enclosure
+
+<img width="527" height="662" alt="HC-SR04 enclosure" src="https://github.com/user-attachments/assets/073a582e-577a-4d86-93b4-127253ba2f39" />
+<img width="790" height="642" alt="HC-SR04 enclosure" src="https://github.com/user-attachments/assets/f9e592eb-6857-463a-8dbb-0c1acc432e50" />
+<img width="749" height="643" alt="HC-SR04 enclosure" src="https://github.com/user-attachments/assets/6ebf0214-24ec-4b1e-8440-d2ba425ea50d" />
+
+### RCWL-1670 enclosure
+
+<img width="1062" height="746" alt="RCWL-1670 enclosure" src="https://github.com/user-attachments/assets/33d69839-0a9a-4ed6-84c2-53312cb3b307" />
+<img width="911" height="579" alt="RCWL-1670 enclosure" src="https://github.com/user-attachments/assets/e85e13e2-ffa4-4492-a19e-380194664d0d" />
+<img width="890" height="575" alt="RCWL-1670 enclosure" src="https://github.com/user-attachments/assets/1775b5ef-e1d6-4e0c-b435-18235bba3379" />
+<img width="866" height="542" alt="RCWL-1670 enclosure" src="https://github.com/user-attachments/assets/f46cebfd-67d3-4c09-a507-9337d41aa5df" />
